@@ -19,17 +19,13 @@ import (
 const ErrorHeader = "linkerd-error"
 
 func HandleApiRequest(serverUrl *url.URL, endpoint string, req proto.Message, resp proto.Message) error {
-	httpRsp, err := post(context.TODO(), endpointNameToPublicAPIURL(serverUrl, endpoint), req)
+	httpResp, err := HandleRequest(http.DefaultClient, endpointNameToPublicAPIURL(serverUrl, endpoint), req)
 	if err != nil {
-		return fmt.Errorf("post request failed: %s", err.Error())
-	}
-	defer httpRsp.Body.Close()
-
-	if err := CheckIfResponseHasError(httpRsp); err != nil {
 		return err
 	}
 
-	reader := bufio.NewReader(httpRsp.Body)
+	defer httpResp.Body.Close()
+	reader := bufio.NewReader(httpResp.Body)
 	return FromByteStreamToProtocolBuffers(reader, resp)
 }
 
@@ -37,7 +33,20 @@ func endpointNameToPublicAPIURL(serverUrl *url.URL, endpoint string) *url.URL {
 	return serverUrl.ResolveReference(&url.URL{Path: endpoint})
 }
 
-func post(ctx context.Context, url *url.URL, req proto.Message) (*http.Response, error) {
+func HandleRequest(client *http.Client, url *url.URL, req proto.Message) (*http.Response, error) {
+	resp, err := post(client, url, req)
+	if err != nil {
+		return nil, fmt.Errorf("post request failed: %s", err.Error())
+	}
+
+	if err := checkIfResponseHasError(resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func post(client *http.Client, url *url.URL, req proto.Message) (*http.Response, error) {
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request failed: %s", err.Error())
@@ -48,10 +57,10 @@ func post(ctx context.Context, url *url.URL, req proto.Message) (*http.Response,
 		return nil, fmt.Errorf("new http request failed: %s", err.Error())
 	}
 
-	return http.DefaultClient.Do(httpReq.WithContext(ctx))
+	return client.Do(httpReq.WithContext(context.TODO()))
 }
 
-func CheckIfResponseHasError(rsp *http.Response) error {
+func checkIfResponseHasError(rsp *http.Response) error {
 	errorMsg := rsp.Header.Get(ErrorHeader)
 	if errorMsg != "" {
 		reader := bufio.NewReader(rsp.Body)
